@@ -1,0 +1,858 @@
+---
+title: "Course vs Bucket Forecasting Analysis 2018-2019"
+author: "Jonathan Cheng"
+date: "08/01/2020"
+output: html_document
+---
+<style type="text/css">
+  
+  body{ /* Normal  */
+        font-size: 16px;
+      padding-top: 20px;
+      padding-bottom: 10px;
+      padding-right: 0px;
+      padding-left: 0px;
+    }
+  
+  h1 { /* Header 1 */
+      font-size: 25px;
+    border-bottom:1px solid #CCC;
+    padding-top: 10px;
+    padding-bottom: 5px;
+    padding-right: 0px;
+    padding-left: 0px;
+  }
+  
+  h2 { /* Header 2 */
+      font-size: 20px;
+    padding-top: 10px;
+    padding-bottom: 5px;
+    padding-right: 0px;
+    padding-left: 0px;
+    background: #f9f7f7;
+  }
+  
+  h3 { /* Header 3 */
+      font-size: 18px;
+    font-style: italic;
+    padding-top: 10px;
+    padding-bottom: 5px;
+    padding-right: 0px;
+    padding-left: 0px;
+  }
+  
+  body .main-container {
+    max-width: 1200px;
+  }
+  
+  th {
+    background-color: rgb(211,211,211);
+    color: black;
+    font-weight: normal;
+    padding: 20px 30px;
+    font-size: 14px;
+    text-align: left;
+  }
+  
+  td {
+    background-color:  	rgb(255,255,255);
+    color: rgb(111, 111, 111);
+    padding: 20px 30px;
+    font-size: 14px;
+    text-align: left;
+  }
+  
+  a.top {
+    color: #2da1c1;
+      font-size: small;
+    text-decoration: none;
+    float: right;
+  }
+  
+  a.top:hover
+  {
+    color: #f90;
+      text-decoration: underline;         
+  }
+
+</style>  
+```{r setup and read in libraries, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+# 0.1. Open the libraries ---------------------------------
+library(tidyverse)
+library(readxl)
+library(odbc)
+library(plotly)
+library(knitr)
+library(gapminder)
+```
+ 
+```{r login to callista environments, include=FALSE}
+# 0.2. Set working directory ---------------------------------------------------
+#wd <- rstudioapi::getActiveDocumentContext()$path %>% dirname()
+#setwd(wd)
+# Create db connection
+cprd_con <- DBI::dbConnect(odbc::odbc(), "cprd", UID = getPass::getPass(), PWD = getPass::getPass())
+cqaf_con <- DBI::dbConnect(odbc::odbc(), "cqaf", UID = getPass::getPass(), PWD = getPass::getPass())
+dlsdev <- DBI::dbConnect(odbc::odbc(), "dlsdev", UID = getPass::getPass(), PWD = getPass::getPass())
+```
+
+```{r read in queries and query database, include = FALSE}
+# Read query
+#sql_file <- "Unit Load Actuals for 2018.txt"
+#sql <- read_file(sql_file)
+histoic_actuals_txt <- "EoY actuals for 2019-2018-2017.txt"
+historic_actuals_sql <- read_file(histoic_actuals_txt)
+
+#actuals <- DBI::dbGetQuery(cprd_con, sql)
+actuals <-DBI::dbGetQuery(cprd_con, historic_actuals_sql)
+Teaching_faculty_lookup <- DBI::dbGetQuery(cprd_con, "select ORG_UNIT_CD AS DEPARTMENT_CD, DESCRIPTION AS DEPARTMENT
+                                                from SIS_OWNER.ORG_UNIT
+                                                where ORG_STATUS = 'ACTIVE'")
+Tfac_names <- read_csv("TFAC LOOKUP.csv")
+# Query for course architecture changes
+course_arch_file <- "Course Architecture.sql"
+course_arch_sql <- read_file(course_arch_file)
+course_arch_lookup <- DBI::dbGetQuery(dlsdev, course_arch_sql)
+```
+
+```{r Read in COURSE forecasts, include=FALSE}
+course_code_forecasts <- DBI::dbGetQuery(cqaf_con, "SELECT lftcl.reference_year,
+                                         LFTCL.forecast_load_id,
+                                         LFTCL.forecast_control_id,
+                                         LFTCL.forecast_methodology_id,
+                                         FCTRL.REFERENCE_YEAR_PIT_DATE as CURR_YR_FORECAST_DATE,
+                                         LFTCL.TEACHING_FACULTY,
+                                         TFAC.DESCRIPTION AS TEACHING_FACULTY_DESCRIPTION,
+                                         LFTCL.TR_ORG_UNIT_CD,
+                                         DEP.DESCRIPTION AS TR_ORG_UNIT_CD_DESCRIPTION,
+                                         MFAC.DEGREE_FACULTY_NAME AS FACULTY,
+                                         DFAC.DEGREE_FACULTY_NAME AS DEGREE_FACULTY,
+                                         LFTCL.FUNDING_SOURCE,
+                                         FS.DESCRIPTION AS FUND_SOURCE_DESCRIPTION,
+                                         LFTCL.COURSE_LEVEL,
+                                         LFTCL.COURSE_CD,
+                                         LFTCL.SCA_COORD_CAMPUS,
+                                         LFTCL.SUA_LOCATION_CD,
+                                         LFTCL.UNIT_MODE,
+                                         LFTCL.COMMENCING_STUDENT_IND,
+                                         LFTCL.OFFICIAL_CLUSTER,
+                                         LFTCL.MONASH_CLUSTER,
+                                         LFTCL.HIGH_LOW_COST,
+                                         LFTCL.REPORTED_FORECAST_TAUGHT_LOAD,
+                                         TO_CHAR(FCTRL.REFERENCE_YEAR_PIT_DATE,'FMMonth') AS FCAST_MONTH
+                                         FROM lpm_forecast_taught_crs_load LFTCL
+                                         LEFT JOIN LPM_CUSTOM.LPM_FORECAST_CRS_CONTROL  FCTRL
+                                         ON LFTCL.FORECAST_CONTROL_ID = FCTRL.FORECAST_CONTROL_ID
+                                         LEFT JOIN SIS_OWNER.ORG_UNIT TFAC
+                                         ON LFTCL.TEACHING_FACULTY = TFAC.ORG_UNIT_CD
+                                         AND TFAC.ORG_STATUS = 'ACTIVE'
+                                         LEFT JOIN SIS_OWNER.ORG_UNIT DEP
+                                         ON LFTCL.TR_ORG_UNIT_CD = DEP.ORG_UNIT_CD
+                                         AND DEP.ORG_STATUS = 'ACTIVE'
+                                         LEFT JOIN SIS_OWNER.FUNDING_SOURCE FS
+                                         ON LFTCL.FUNDING_SOURCE = FS.FUNDING_SOURCE
+                                         LEFT JOIN LPM_CUSTOM.LPM_DEGREE_FACULTY DFAC
+                                         ON LFTCL.DEGREE_FACULTY_ID = DFAC.DEGREE_FACULTY_ID
+                                         AND LFTCL.REFERENCE_YEAR = DFAC.REFERENCE_YEAR
+                                         LEFT JOIN LPM_CUSTOM.LPM_DEGREE_FACULTY MFAC
+                                         ON LFTCL.FACULTY_ID = MFAC.DEGREE_FACULTY_ID
+                                         AND LFTCL.REFERENCE_YEAR = MFAC.REFERENCE_YEAR
+                                         where LFTCL.FORECAST_CONTROL_ID IN (40,32,37,29,30,41,42,38)")
+
+backup_course_code_forecasts <- read_excel("DATA EXTRACT - COURSE CODE FORECASTS.xlsx")
+
+```
+
+```{r Read in bucket data, include=FALSE}
+bucket_fcast <- list(
+  March = read_excel("1. MARCH Bucket METIS.xlsx"),
+  March = read_excel("1. 20032019 MARCH Bucket METIS.xlsx"),
+  June =  read_excel("2. JUNE Bucket METIS.xlsx"),
+  June = read_excel("2. 27062019 JUNE Bucket METIS.xlsx"),
+  July = read_excel("3. JULY Bucket METIS.xlsx"),
+  September = read_excel("4. SEPT Bucket METIS.xlsx", guess_max = 99999) %>% 
+    mutate(REFERENCE_YEAR = as.numeric(REFERENCE_YEAR)) %>% 
+    mutate(OFFICIAL_CLUSTER = as.numeric(OFFICIAL_CLUSTER)),
+  #This forecast was done at the end of September for October
+  September = read_excel("4. 23092019 OCT Bucket METIS.xlsx"),
+  November = read_excel("5. NOV Bucket METIS.xlsx")
+)
+```
+
+```{r Set year to analyse, include=FALSE}
+year_to_check <- 2018
+```
+
+```{r Prepare Actuals, include=FALSE}
+actuals_summary <- actuals %>% 
+  filter(YEAR == year_to_check) %>% 
+  # filter(MONASH_LOAD == "Monash Uni") %>% 
+  group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY_CD, TEACHING_FACULTY_NAME, DEPARTMENT_CD, DEPARTMENT, 
+           COURSE_LEVEL, CAMPUS, UNIT_MODE, FUND_SOURCE, COM_RET, COURSE_CD, COURSE_DESCRIPTION) %>% 
+  summarise(ACTUALS_EFTSL = sum(EFTSL, na.rm = TRUE)) %>% 
+  ungroup()
+
+course_fcast_summary <- backup_course_code_forecasts %>% 
+  filter(REFERENCE_YEAR == year_to_check) %>%
+      group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY, TEACHING_FACULTY_DESCRIPTION, TR_ORG_UNIT_CD, TR_ORG_UNIT_CD_DESCRIPTION, COURSE_LEVEL, SCA_COORD_CAMPUS, UNIT_MODE, FUND_SOURCE_DESCRIPTION, COMMENCING_STUDENT_IND, COURSE_CD, FCAST_MONTH) %>%
+  summarise(FCAST_EFTSL = sum(REPORTED_FORECAST_TAUGHT_LOAD, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  rename(COM_RET = COMMENCING_STUDENT_IND,
+         FUND_SOURCE = FUND_SOURCE_DESCRIPTION,
+         CAMPUS = SCA_COORD_CAMPUS,
+         #COURSE_CD = COURSE_ARCH_FIX,
+         TEACHING_FACULTY_CD = TEACHING_FACULTY,
+         TEACHING_FACULTY_NAME = TEACHING_FACULTY_DESCRIPTION,
+         DEPARTMENT_CD = TR_ORG_UNIT_CD,
+         DEPARTMENT = TR_ORG_UNIT_CD_DESCRIPTION) %>% 
+  mutate(COM_RET = ifelse(COM_RET == "Y", "Commencing", "Returning")) %>% 
+  mutate_at(vars(TEACHING_FACULTY_CD,DEPARTMENT_CD),as.character) %>% 
+  mutate_at(vars(TEACHING_FACULTY_NAME,DEPARTMENT),toupper) %>%
+  mutate(FCAST_TYPE = 'course') %>% 
+# Correct teaching faculties
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000982', 'WATER STUDIES CENTRE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'MUSIC TECHNOLOGY', DEPARTMENT)) %>% 
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000766', 'DEPARTMENT OF DESIGN', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000767', 'DEPARTMENT OF FINE ART', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000977', 'SCH OF MATHEMATICS', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50001040', 'HUDSON DEPT OF MOLECULAR & TRANS SCIENCE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50001045', 'DEPARTMENT OF NEUROSCIENCE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50017828', 'DEPARTMENT OF PARAMEDICINE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50049270', 'DEPARTMENT OF ARCHITECTURE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50138873', 'PPS EDUCATION', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50140748', 'COMPOSITION & MUSIC TECHNOLOGY', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'NA', DEPARTMENT))
+```
+
+```{r Combine Course Forecasts with Actuals, include=FALSE}
+load_data <- course_fcast_summary %>%
+  split(.$FCAST_MONTH) %>% 
+  map(full_join, actuals_summary) %>% 
+  map_dfr(~mutate(., FCAST_MONTH = replace_na(FCAST_MONTH, max(FCAST_MONTH, na.rm=TRUE))))
+
+load_data %>% group_by(FCAST_MONTH) %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE)
+```
+
+```{r Prepare bucket level data, include=FALSE}
+bucket_actuals_summary <- actuals %>% 
+  filter(YEAR == year_to_check) %>% 
+  # filter(MONASH_LOAD == "Monash Uni") %>% 
+  group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY_CD, TEACHING_FACULTY_NAME, DEPARTMENT_CD, DEPARTMENT,            COURSE_LEVEL, CAMPUS, UNIT_MODE, FUND_SOURCE, COM_RET) %>% 
+  summarise(ACTUALS_EFTSL = sum(EFTSL, na.rm = TRUE)) %>% 
+  ungroup() 
+
+bucket_fcast_summary <- bucket_fcast %>% 
+  imap_dfr(~mutate(., FCAST_MONTH = .y)) %>% 
+  filter(REFERENCE_YEAR == year_to_check) %>%
+  group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY, TEACHING_FACULTY_DESCRIPTION, TR_ORG_UNIT_CD, TR_ORG_UNIT_CD_DESCRIPTION, COURSE_LEVEL, SCA_COORD_CAMPUS, UNIT_MODE, FUND_SOURCE_DESCRIPTION, COMMENCING_STUDENT_IND, FCAST_MONTH) %>% 
+  summarise(FCAST_EFTSL = sum(REPORTED_FORECAST_TAUGHT_LOAD, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  rename(COM_RET = COMMENCING_STUDENT_IND,
+         FUND_SOURCE = FUND_SOURCE_DESCRIPTION,
+         CAMPUS = SCA_COORD_CAMPUS,
+         TEACHING_FACULTY_CD = TEACHING_FACULTY,
+         TEACHING_FACULTY_NAME = TEACHING_FACULTY_DESCRIPTION,
+         DEPARTMENT_CD = TR_ORG_UNIT_CD,
+         DEPARTMENT = TR_ORG_UNIT_CD_DESCRIPTION) %>% 
+  mutate(COM_RET = ifelse(COM_RET == "Y", "Commencing", "Returning")) %>% 
+  mutate_at(vars(TEACHING_FACULTY_CD,DEPARTMENT_CD),as.character) %>% 
+  mutate_at(vars(TEACHING_FACULTY_NAME,DEPARTMENT),toupper) %>% 
+# Correct teaching faculties
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000982', 'WATER STUDIES CENTRE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'MUSIC TECHNOLOGY', DEPARTMENT)) %>% 
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000766', 'DEPARTMENT OF DESIGN', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000767', 'DEPARTMENT OF FINE ART', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000977', 'SCH OF MATHEMATICS', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50001040', 'HUDSON DEPT OF MOLECULAR & TRANS SCIENCE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50001045', 'DEPARTMENT OF NEUROSCIENCE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50017828', 'DEPARTMENT OF PARAMEDICINE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50049270', 'DEPARTMENT OF ARCHITECTURE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50138873', 'PPS EDUCATION', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50140748', 'COMPOSITION & MUSIC TECHNOLOGY', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'NA', DEPARTMENT))
+
+bucket_load_data <- bucket_actuals_summary %>% 
+  full_join(bucket_fcast_summary)
+
+bucket_load_data <- bucket_fcast_summary %>%
+  split(.$FCAST_MONTH) %>% 
+  map(full_join, bucket_actuals_summary) %>% 
+  map_dfr(~mutate(., FCAST_MONTH = replace_na(FCAST_MONTH, max(FCAST_MONTH, na.rm=TRUE)))) 
+
+bucket_load_data %>% group_by(FCAST_MONTH) %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE)
+```
+
+```{r Join data together and create consolidated dataset, include=FALSE}
+Consolidated_data <- load_data %>% mutate(FCAST_TYPE = 'Course') %>% 
+  full_join(
+    bucket_load_data %>% mutate(FCAST_TYPE = 'Bucket')
+    ) 
+
+Consolidated_data %>% group_by(FCAST_MONTH, FCAST_TYPE) %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE)
+```
+
+```{r Summarise for Monash Uni load, include=FALSE}
+Consolidated_data %>% filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA"  & FACULTY != 'Monash College' & FACULTY  != 'MC MUELC' & FACULTY != 'MC MUFY') %>%
+  #filter(FCAST_MONTH == 'september') %>%
+  group_by(FCAST_MONTH, FCAST_TYPE) %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE) 
+  #write_csv(path = "../03. Outputs/Monash Load Forecast Summary.csv")
+```
+## Overview
+Monash University uses a load monitoring forecast with manual faculty-informed overrides to predict the End of Year (EoY) load at the bucket level^[ A bucket represents an aggregation of Faculty, Degree Faculty, Fund Source, Campus, Course Level Unit Mode].The EoY forecast is then used in standard reporting and for budgeting purposes. As of 2017, the University began to transition load planning from buckets to course code level. This has resulted in a disconnect between the load plans against which actuals can be tracked at the course level and the EoY forecast, which remains at the bucket level. As a result, a Kronos enhancement was implemented to automatically forecast at the course level in parallel to the existing manual bucket level forecasts.
+
+To confirm the viability of Course Code forecasting there is a need to clarify the workload requirements and the impacts of the Course Code methodology on the forecasting accuracy. This report has found that the purely automated Course Code forecast would result in significant reductions in resourcing, however the loss in accuracy causes the Course Code forecast to be not fit for purpose. 
+
+The report has compared the Course Code forecasts for 2018 and 2019 and compares the accuracy with the corresponding "Bucket forecast with faculty overrides" (Bucket forecast).This analysis has found that the Course Code forecast is subject to significant inaccuracies across the teaching faculties and is particularly inaccurate at forecasting load in the CSP and International: Australia fund sources.
+
+A blanket manual correction similar to the current override process is also discussed, where faculties would analyse and correct their Course Code forecasts to uplift accuracy. This results in 2 possible directions for forecasting:
+
+**1.** Maintain the Bucket forecast while the Course Code model is redeveloped.
+
+**2.** Use the Course Code forecast with faculty provided overrides.
+
+Unfortunately, Option 2. is not recommended due to the exponential increase in workload. Consequently, the recommendation is to maintain the Bucket forecast while re-assessing the Course Code forecasting model to determine where broad systematic corrections can be made on key cohorts that will improve accuracy.
+
+## Course code versus Bucket forecasting workload
+
+After reviewing the 2018 process, it is estimated that each forecasting run involved six working days on average of dedicated work by a Planning Partner with support from a Manager resource. This included an extra day of faculty consultation as required. Therefore, the estimated UPS cost is $3,386 (faculty consultation inclusive) times the number of forecasts in the year.
+
+Consultation with a sample of faculties (IT, Engineering, Science and MNHS) was conducted to gain some insight into the resource expenditure to undertake the faculty override process. Faculty involvement was variable. IT and Engineering indicated the Group Manager undertook the work, which was considered minimal as only a quick high-level scan of the document provided by UPS was required. Science had one analyst dedicated over two days to develop the initial forecast, with minimal further effort required for future forecasts. In comparison, MNHS undertook a much more rigorous approach, which involved dedicating a senior analyst resource for up to a day per forecast. 
+
+Therefore, across the institution, the 2018 forecasting was estimated to take 66 - 102 staff days to complete, resulting in a total 2018 expenditure of between \$43,506 and \$62,940 in 2018. In comparison the more streamlined 2019 Bucket forecast process approximately cost between \$24,597 and \$31,075.
+
+![](Financial imagev2.png)
+
+Alternatively, the Course Code forecast is an automated process that currently only requires approximately 3 hours of a Planning Partner resource. However, this reduced resourcing is offset by a significant reduction in forecast accuracy, as explored in the following discussion. 
+
+Currently a much more rigorous correction process would be required across the large Course Code forecast output in order to uplift the Course Code forecast accuracy. This will exponentially increase the analytics resourcing required for both UPS and the faculties. In some cases, the analysis at the course code level would be over 300% of the current workload.
+
+```{r row increase bucket vs forecast, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+Row_workload <- read_csv("Rows for analysis.csv")
+Row_workload %>% filter(Month == 'June') %>%
+  select(Faculty,`Bucket Forecast Row #`, `Course Code Row #`, `Course Code:Bucket Workload Ratio`) %>%
+  kable(caption = "Number of rows required to be analysed for June forecast")
+```
+
+## Course Code forecast accuracy analsysis
+### Summary of institutional accuracy by month
+
+When filtering for all Monash University Load, it is evident that on aggregate the 2018 Bucket forecast with overrides was significantly more accurate across all forecasting periods (Table 1.). This is also true for all forecasting periods in 2019 (Appendix 1). On aggregate, the Course Code forecast appears to do comparatively poorly in the early stages of the year, leading to a significant increased overall error rate of 3.5% (March) and 3.65% (June). This is much higher than the Bucket forecast with overrides which had a maximum error rate of 0.34% across 2018 (Figure 1.).
+
+```{r Commence error analysis, echo = FALSE, message = FALSE}
+Consolidated_error_analysis <- Consolidated_data %>%
+  filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA"  & 
+           !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", 
+                            "Extension Studies", "MSDI", "MUARC"))) %>% 
+  replace_na(list(ACTUALS_EFTSL = 0, FCAST_EFTSL = 0)) %>%
+  mutate(ForecastError = round((FCAST_EFTSL -  ACTUALS_EFTSL),2))
+
+if (year_to_check == 2018) {
+Consolidated_error_analysis$FCAST_MONTH <- factor(Consolidated_error_analysis$FCAST_MONTH,
+                                                levels = c("March","June", "July", "September", "November"))} else {
+ Consolidated_error_analysis$FCAST_MONTH <- factor(Consolidated_error_analysis$FCAST_MONTH,               
+                                                levels = c("March","June", "September"))
+                                                }
+
+Consolidated_error_analysis %>% 
+  mutate(ABSForecastError = round(abs(ForecastError),2)) %>%
+  group_by(FCAST_MONTH, FCAST_TYPE)  %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE)  %>%
+  ungroup() %>% 
+  kable(caption = " TABLE 1. Course vs Bucket Forecast Summary for 2018 Monash Load", 
+        col.names = c("Month",
+                      "Forecast Type",
+                      "Forecast (EFTSL)",
+                      "Actual Load",
+                      "Error",
+                      "Absolute Error"))
+```
+
+```{r plot error by forecast month, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+Forecast_monash_uni_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+               !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies"))) %>%
+  group_by(FCAST_MONTH, FCAST_TYPE) %>%  
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>%
+  ungroup() %>% 
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2))
+
+p <- ggplot(Forecast_monash_uni_error, aes(x = FCAST_TYPE, y = ForecastError,
+                                           fill = FCAST_TYPE,
+                                           text = paste0('</br> Forecasted EFTSL: ', round(FCAST_EFTSL,2),
+                                                   '</br> Actual EFTSL: ', round(ACTUALS_EFTSL,2),
+                                                   '</br> Error: ', round(ForecastError,2),
+                                                   '</br> % Error: ', round(percError,2), '%'))) +
+  geom_bar(stat = 'identity', width = 1) +
+  geom_text(aes(label = paste(percError,"%")), vjust = -0.25) +
+  facet_wrap(~FCAST_MONTH, switch = 'x', scales = "free_x", ncol = 5) +
+  theme(panel.margin = unit(0, "lines"), strip.background = element_blank())+
+  xlab("Teaching Faculty") +ylab("Forecast Error") + labs(fill = 'Forecast Type')
+plot_monash_load <- p %>% ggplotly(tooltip = "text", width = 1280, height = 500) %>% 
+ layout(margin = list(l = 50, r = 50, t = 60, b = 80),
+           annotations = list(text = 'Figure 1. Bar graph comparing the aggregate Monash Course Code and Bucket forecast error for 2018.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.2))
+plot_monash_load[['x']][['layout']][['annotations']][[2]][['x']] <- -0.03
+plot_monash_load[['x']][['layout']][['annotations']][[1]][['y']] <- -0.07
+plot_monash_load
+# ggsave("../03. Outputs/01. r plot error by forecast month.png")
+```
+
+### Summary of forecasted teaching faculty accuracy by month
+One of the key outcomes of the load forecasting process is to support the budget reallocation process throughout the year. Subsequently, it is crucial that the teaching faculty breakdown is accurate as faculties are funded by what they teach.
+
+As the aggregate accuracy of the Course Code forecast is comparatively less than the Bucket forecast with overrides this will ultimately lead to teaching load inacuracies. Therefore, it is necessary to determine which teaching faculties are most impacted by the inaccuracies of the Course Code forecast.
+
+At the teaching faculty level for all fund sources, it appears that nearly all teaching faculties had less accurate Course Code forecasts for 2018 (Figure 2.) and 2019 (Appendix 2.). This was particularly pronounced in the March to July forecasts. In particular:
+
+* InfoTech had a March to July error range of 4.16% to 8.82%. 
+* MADA had a March to July error range of 1.78% to 7.05%.
+* Pharmacy had a March to July error range of 4.43% to 7.25%.
+* The only teaching faculty which saw comparable Course Code forecast accuracy was the Faculty of Law.
+
+```{r plot error by forecast month and teaching faculty, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+Forecast_tfac_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+             !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies"))) %>%
+  filter(grepl('FACULTY OF', TEACHING_FACULTY_NAME)) %>%
+  group_by(TEACHING_FACULTY_CD, DEPARTMENT_CD, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  left_join(Teaching_faculty_lookup, by = c("TEACHING_FACULTY_CD" = 'DEPARTMENT_CD')) %>%
+  rename(TEACHING_FACULTY_NAME = DEPARTMENT) %>% 
+  left_join(Teaching_faculty_lookup, by = c("DEPARTMENT_CD" = 'DEPARTMENT_CD')) %>% 
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000982', 'WATER STUDIES CENTRE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'MUSIC TECHNOLOGY', DEPARTMENT)) %>%
+  left_join(Tfac_names) %>% 
+  group_by(TEACHING_FAC_ABBREV, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2))
+
+p <- ggplot(Forecast_tfac_error, aes(x = FCAST_TYPE, y = ForecastError,
+                                           fill = FCAST_TYPE, frame = FCAST_MONTH,
+                                     text = paste0('</br> Forecasted EFTSL: ', round(FCAST_EFTSL,2),
+                                                   '</br> Actual EFTSL: ', round(ACTUALS_EFTSL,2),
+                                                   '</br> Error: ', round(ForecastError,2),
+                                                   '</br> % Error: ', round(percError,2), '%'))) +
+  geom_point() +
+  #geom_bar(stat = 'identity', width = 1) +
+  geom_text(aes(label = paste(percError,"%")), size = 3.5) +
+  facet_wrap(~TEACHING_FAC_ABBREV, switch = "x",scales = "free_x") +
+  theme(panel.spacing = unit(0, "lines"), strip.background = element_blank()) +
+  xlab("Teaching Faculty") +ylab("Forecast Error") + ylim(-150,800)
+
+
+plot_monthly_tfac <- p %>%  ggplotly(tooltip = "text", width = 1280, height = 500) %>% 
+  style(textposition = "top right") %>% hide_legend()
+plot_monthly_tfac[['x']][['layout']][['annotations']][[2]][['x']] <- -0.03
+plot_monthly_tfac[['x']][['layout']][['annotations']][[1]][['y']] <- -0.07
+plot_monthly_tfac %>% 
+   layout(margin = list(l = 50, r = 50, t = 60, b = 80),
+           annotations = list(text = 'Figure 2. Plot comparing Course and Bucket forecasts by Teaching Faculty for 2018.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.2))
+
+#ggsave("../03. Outputs/03. r plot error by forecast month and teaching faculty.png")
+```
+
+### Summary of forecasted teaching faculty accuracy by month for key fund sources
+As the inaccuracies appeared to be split across the teaching faculties, further breakdown at the fund source level may assist in determining cohorts for potential forecasting process improvement or manual overrides. The error analysis which incorporates fund source shows a significant course code error across all four key fund sources which is generally higher than the Bucket forecast with overrides. In particular:
+
+* Education, InfoTech, MNHS and Pharmacy show the most significant error in CSP load over the early forecasts.
+* BusEco, Education and InfoTech show the most significant error in DOM FEE:GPG load.
+* International:Australia load appears to be the cohort leading to the most significant course code error. Targetted methdological adjustment in this fund source could largely improve the Course Code forecast.
+* RTP:DOM load also appears to be largely inaccurate in the March Course Code forecast. This error appears to be largely corrected in the proceeding forecasts.
+
+
+```{r plot error by teaching faculty and fund source, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+KeyFundSources <- c("CSP","DOM FEE PAY: GPG","INTERNATIONAL: AUSTRALIA","RESEARCH TRAINING PROGRAM - DOMESTIC")
+Forecast_tfac_fund_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+             !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies")) &
+             #FCAST_MONTH == 'march' &
+             FUND_SOURCE %in% KeyFundSources) %>%
+  filter(grepl('FACULTY OF', TEACHING_FACULTY_NAME)) %>%
+  group_by(FUND_SOURCE,TEACHING_FACULTY_CD, DEPARTMENT_CD, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  left_join(Teaching_faculty_lookup, by = c("TEACHING_FACULTY_CD" = 'DEPARTMENT_CD')) %>%
+  rename(TEACHING_FACULTY_NAME = DEPARTMENT) %>% 
+  left_join(Teaching_faculty_lookup, by = c("DEPARTMENT_CD" = 'DEPARTMENT_CD')) %>% 
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000982', 'WATER STUDIES CENTRE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'MUSIC TECHNOLOGY', DEPARTMENT)) %>%
+  left_join(Tfac_names) %>% 
+  group_by(FUND_SOURCE,TEACHING_FAC_ABBREV, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2)) %>% 
+  mutate(FUND_SOURCE_ABBREV = case_when(FUND_SOURCE == "CSP" ~ "CSP",
+                                      FUND_SOURCE == "DOM FEE PAY: GPG" ~ "DOM: GPG",
+                                      FUND_SOURCE == "INTERNATIONAL: AUSTRALIA" ~ "INT:AUS",
+                                      FUND_SOURCE == "RESEARCH TRAINING PROGRAM - DOMESTIC" ~ "RTP:DOM"))
+
+  p <- ggplot(Forecast_tfac_fund_error, aes(x =FCAST_TYPE, y = ForecastError,
+                                           fill = FCAST_TYPE, frame = FCAST_MONTH,
+                                     text = paste0('</br> Forecasted EFTSL: ', round(FCAST_EFTSL,2),
+                                                   '</br> Actual EFTSL: ', round(ACTUALS_EFTSL,2),
+                                                   '</br> Error: ', round(ForecastError,2),
+                                                   '</br> % Error: ', round(percError,2), '%'))) +
+  geom_point() +
+  #geom_bar(stat = 'identity', width = 0.5, position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = paste(round(percError,1),"%")), size = 3.1) +
+  facet_grid(FUND_SOURCE_ABBREV~TEACHING_FAC_ABBREV, 
+             labeller = label_wrap_gen(width = 4, multi_line = TRUE),
+             scales = "free") +
+  xlab("Teaching Faculty") +ylab("Forecast Error") +labs(fill = 'Forecast Type')
+  # theme(panel.spacing = unit(0, "lines"), strip.background = element_blank()) +
+  # xlab("Forecast Type") 
+plot_monthly_tfac_fund <- p %>% ggplotly( tooltip = "text", width = 1280, height = 600) %>%
+  hide_legend() %>% 
+  style(textposition = "top right")
+plot_monthly_tfac_fund[['x']][['layout']][['annotations']][[2]][['x']] <- -0.03
+plot_monthly_tfac_fund[['x']][['layout']][['annotations']][[1]][['y']] <- -0.07
+plot_monthly_tfac_fund %>% 
+  layout(margin = list(l = 50, r = 50, t = 60, b = 100),
+           annotations = list(text = 'Figure 3. Key fund source comparison by Teaching Faculty for 2018.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.12))
+```
+
+### Correcting the methodology
+After assessing the forecast error, it is evident that the International: Australia and CSP fund sources are a major sources of inaccuracies. Further analysis to improve the model could target courses that experience significant year-on-year fluctuations and incorporate targetted faculty input on these select courses.
+
+```{r course code changes over time, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+KeyFundSources <- c("CSP","DOM FEE PAY: GPG","INTERNATIONAL: AUSTRALIA","RESEARCH TRAINING PROGRAM - DOMESTIC")
+Forecast_course_code_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+             !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies",
+                              "MSDI", "MUARC")) &
+             FCAST_TYPE == 'Course' & 
+             FUND_SOURCE %in% KeyFundSources) %>%
+  group_by(FACULTY,COURSE_CD,COM_RET,FUND_SOURCE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup()  %>% 
+  mutate(ABSForecastError = round(abs(ForecastError),2)) %>% 
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2)) %>% 
+  mutate(ABSpercError = round(100*ABSForecastError/ACTUALS_EFTSL,2)) %>% 
+  filter_at(vars(ABSpercError), all_vars(!is.infinite(.))) %>% 
+  mutate(row_id = paste(FACULTY,COURSE_CD,COM_RET,FUND_SOURCE))
+
+p <- Forecast_course_code_error %>% 
+  plot_ly(x = ~ACTUALS_EFTSL, y = ~ABSForecastError, width = 1280, height = 500) %>% 
+  add_markers(size = ~ ABSpercError, color = ~FUND_SOURCE,
+              hoverinfo = "text",
+              text = paste0('</br>', Forecast_course_code_error$COURSE_CD,
+                            '</br>', Forecast_course_code_error$COM_RET,
+                            '</br> Actual EFTSL: ', Forecast_course_code_error$ACTUALS_EFTSL,
+                            '</br> Forecasted EFTSL: ', round(Forecast_course_code_error$FCAST_EFTSL,2),
+                            '</br> Error: ', Forecast_course_code_error$ForecastError,
+                            '</br> Absolute Error: ', Forecast_course_code_error$ABSForecastError,
+                            '</br> Absolute % Error: ', Forecast_course_code_error$ABSpercError, '%'),
+              symbol = ~as.factor(COM_RET), ids = ~row_id,
+              frame = ~FCAST_MONTH, MARKER = list(sizemode = "diameter")) %>% 
+  layout(xaxis = list(title = "Actual Load"), yaxis = list(title = "Absolute Error"))
+p %>% layout(margin = list(l = 50, r = 50, t = 60, b = 100),
+           annotations = list(text = 'Figure 4. Scatter plot of all course absolute error by key fund source for 2018.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.12))
+```
+
+### Appendix
+The following plots demonstrate the same analysis, conducted for 2019. Due to changes in the forecasting timelines only three date points were comparable.
+
+```{r rerunning all plots for 2019, include = FALSE}
+year_to_check <- 2019
+actuals_summary <- actuals %>% 
+  filter(YEAR == year_to_check) %>% 
+  # filter(MONASH_LOAD == "Monash Uni") %>% 
+  group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY_CD, TEACHING_FACULTY_NAME, DEPARTMENT_CD, DEPARTMENT, 
+           COURSE_LEVEL, CAMPUS, UNIT_MODE, FUND_SOURCE, COM_RET, COURSE_CD, COURSE_DESCRIPTION) %>% 
+  summarise(ACTUALS_EFTSL = sum(EFTSL, na.rm = TRUE)) %>% 
+  ungroup()
+
+course_fcast_summary <- backup_course_code_forecasts %>% 
+  filter(REFERENCE_YEAR == year_to_check) %>%
+      group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY, TEACHING_FACULTY_DESCRIPTION, TR_ORG_UNIT_CD, TR_ORG_UNIT_CD_DESCRIPTION, COURSE_LEVEL, SCA_COORD_CAMPUS, UNIT_MODE, FUND_SOURCE_DESCRIPTION, COMMENCING_STUDENT_IND, COURSE_CD, FCAST_MONTH) %>%
+  summarise(FCAST_EFTSL = sum(REPORTED_FORECAST_TAUGHT_LOAD, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  rename(COM_RET = COMMENCING_STUDENT_IND,
+         FUND_SOURCE = FUND_SOURCE_DESCRIPTION,
+         CAMPUS = SCA_COORD_CAMPUS,
+         #COURSE_CD = COURSE_ARCH_FIX,
+         TEACHING_FACULTY_CD = TEACHING_FACULTY,
+         TEACHING_FACULTY_NAME = TEACHING_FACULTY_DESCRIPTION,
+         DEPARTMENT_CD = TR_ORG_UNIT_CD,
+         DEPARTMENT = TR_ORG_UNIT_CD_DESCRIPTION) %>% 
+  mutate(COM_RET = ifelse(COM_RET == "Y", "Commencing", "Returning")) %>% 
+  mutate_at(vars(TEACHING_FACULTY_CD,DEPARTMENT_CD),as.character) %>% 
+  mutate_at(vars(TEACHING_FACULTY_NAME,DEPARTMENT),toupper) %>%
+  mutate(FCAST_TYPE = 'course')
+```
+
+```{r 2019 Combine Course Forecasts with Actuals, include=FALSE}
+load_data <- course_fcast_summary %>%
+  split(.$FCAST_MONTH) %>% 
+  map(full_join, actuals_summary) %>% 
+  map_dfr(~mutate(., FCAST_MONTH = replace_na(FCAST_MONTH, max(FCAST_MONTH, na.rm=TRUE))))
+
+load_data %>% group_by(FCAST_MONTH) %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE)
+```
+
+```{r 2019 Prepare bucket level data, include=FALSE}
+bucket_actuals_summary <- actuals %>% 
+  filter(YEAR == year_to_check) %>% 
+  # filter(MONASH_LOAD == "Monash Uni") %>% 
+  group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY_CD, TEACHING_FACULTY_NAME, DEPARTMENT_CD, DEPARTMENT,            COURSE_LEVEL, CAMPUS, UNIT_MODE, FUND_SOURCE, COM_RET) %>% 
+  summarise(ACTUALS_EFTSL = sum(EFTSL, na.rm = TRUE)) %>% 
+  ungroup() 
+
+bucket_fcast_summary <- bucket_fcast %>% 
+  imap_dfr(~mutate(., FCAST_MONTH = .y)) %>% 
+  filter(REFERENCE_YEAR == year_to_check) %>%
+  group_by(FACULTY, DEGREE_FACULTY, TEACHING_FACULTY, TEACHING_FACULTY_DESCRIPTION, TR_ORG_UNIT_CD, TR_ORG_UNIT_CD_DESCRIPTION, COURSE_LEVEL, SCA_COORD_CAMPUS, UNIT_MODE, FUND_SOURCE_DESCRIPTION, COMMENCING_STUDENT_IND, FCAST_MONTH) %>% 
+  summarise(FCAST_EFTSL = sum(REPORTED_FORECAST_TAUGHT_LOAD, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  rename(COM_RET = COMMENCING_STUDENT_IND,
+         FUND_SOURCE = FUND_SOURCE_DESCRIPTION,
+         CAMPUS = SCA_COORD_CAMPUS,
+         TEACHING_FACULTY_CD = TEACHING_FACULTY,
+         TEACHING_FACULTY_NAME = TEACHING_FACULTY_DESCRIPTION,
+         DEPARTMENT_CD = TR_ORG_UNIT_CD,
+         DEPARTMENT = TR_ORG_UNIT_CD_DESCRIPTION) %>% 
+  mutate(COM_RET = ifelse(COM_RET == "Y", "Commencing", "Returning")) %>% 
+  mutate_at(vars(TEACHING_FACULTY_CD,DEPARTMENT_CD),as.character) %>% 
+  mutate_at(vars(TEACHING_FACULTY_NAME,DEPARTMENT),toupper)
+
+bucket_load_data <- bucket_actuals_summary %>% 
+  full_join(bucket_fcast_summary)
+
+bucket_load_data <- bucket_fcast_summary %>%
+  split(.$FCAST_MONTH) %>% 
+  map(full_join, bucket_actuals_summary) %>% 
+  map_dfr(~mutate(., FCAST_MONTH = replace_na(FCAST_MONTH, max(FCAST_MONTH, na.rm=TRUE))))
+
+bucket_load_data %>% group_by(FCAST_MONTH) %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE)
+```
+
+```{r 2019 Join data together and create consolidated dataset, include=FALSE}
+Consolidated_data <- load_data %>% mutate(FCAST_TYPE = 'Course') %>% 
+  full_join(
+    bucket_load_data %>% mutate(FCAST_TYPE = 'Bucket')
+    )
+```
+
+```{r 2019 Commence error analysis, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+Consolidated_error_analysis <- Consolidated_data %>%
+  filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA"  & 
+           !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", 
+                            "Extension Studies", "MSDI", "MUARC"))) %>% 
+  replace_na(list(ACTUALS_EFTSL = 0, FCAST_EFTSL = 0)) %>%
+  mutate(ForecastError = round((FCAST_EFTSL -  ACTUALS_EFTSL),2))
+
+if (year_to_check == 2018) {
+Consolidated_error_analysis$FCAST_MONTH <- factor(Consolidated_error_analysis$FCAST_MONTH,
+                                                levels = c("March","June", "July", "September", "November"))} else {
+ Consolidated_error_analysis$FCAST_MONTH <- factor(Consolidated_error_analysis$FCAST_MONTH,               
+                                                levels = c("March","June", "September"))
+                                                }
+Consolidated_error_analysis %>% 
+  mutate(ABSForecastError = round(abs(ForecastError),2)) %>%
+  group_by(FCAST_MONTH, FCAST_TYPE)  %>% 
+  summarise_if(is.numeric, sum, na.rm=TRUE)  %>%
+  ungroup() %>% 
+  kable(caption = "Appendix 1. Course vs Bucket Forecast Summary for 2019 Monash Load", 
+        col.names = c("Month",
+                      "Forecast Type",
+                      "Forecast (EFTSL)",
+                      "Actual Load",
+                      "Error",
+                      "Absolute Error"))
+```
+
+```{r 2019 plot error by forecast month, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+Forecast_monash_uni_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+               !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies"))) %>%
+  group_by(FCAST_MONTH, FCAST_TYPE) %>%  
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>%
+  ungroup() %>% 
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2))
+
+p <- ggplot(Forecast_monash_uni_error, aes(x = FCAST_TYPE, y = ForecastError,
+                                           fill = FCAST_TYPE,
+                                           text = paste0('</br> Forecasted EFTSL: ', round(FCAST_EFTSL,2),
+                                                   '</br> Actual EFTSL: ', round(ACTUALS_EFTSL,2),
+                                                   '</br> Error: ', round(ForecastError,2),
+                                                   '</br> % Error: ', round(percError,2), '%'))) +
+  geom_bar(stat = 'identity', width = 1) +
+  geom_text(aes(label = paste(percError,"%")), vjust = -0.25) +
+  facet_wrap(~FCAST_MONTH, switch = 'x', scales = "free_x", ncol = 5) +
+  theme(panel.margin = unit(0, "lines"), strip.background = element_blank())+
+  xlab("Teaching Faculty") +ylab("Forecast Error") + labs(fill = 'Forecast Type')
+plot_monash_load <- p %>% ggplotly(tooltip = "text", width = 1280, height = 500) %>% 
+ layout(margin = list(l = 50, r = 50, t = 60, b = 80),
+           annotations = list(text = 'Appendix 2. Bar graph comparing the aggregate Monash Course Code and Bucket forecast error for  2019.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.2))
+plot_monash_load[['x']][['layout']][['annotations']][[2]][['x']] <- -0.03
+plot_monash_load[['x']][['layout']][['annotations']][[1]][['y']] <- -0.07
+plot_monash_load
+```
+
+```{r 2019 plot error by forecast month and teaching faculty, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+Forecast_tfac_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+             !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies"))) %>%
+  filter(grepl('FACULTY OF', TEACHING_FACULTY_NAME)) %>%
+  group_by(TEACHING_FACULTY_CD, DEPARTMENT_CD, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  left_join(Teaching_faculty_lookup, by = c("TEACHING_FACULTY_CD" = 'DEPARTMENT_CD')) %>%
+  rename(TEACHING_FACULTY_NAME = DEPARTMENT) %>% 
+  left_join(Teaching_faculty_lookup, by = c("DEPARTMENT_CD" = 'DEPARTMENT_CD')) %>% 
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000982', 'WATER STUDIES CENTRE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'MUSIC TECHNOLOGY', DEPARTMENT)) %>%
+  left_join(Tfac_names) %>% 
+  group_by(TEACHING_FAC_ABBREV, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2))
+
+p <- ggplot(Forecast_tfac_error, aes(x = FCAST_TYPE, y = ForecastError,
+                                           fill = FCAST_TYPE, frame = FCAST_MONTH,
+                                     text = paste0('</br> Forecasted EFTSL: ', round(FCAST_EFTSL,2),
+                                                   '</br> Actual EFTSL: ', round(ACTUALS_EFTSL,2),
+                                                   '</br> Error: ', round(ForecastError,2),
+                                                   '</br> % Error: ', round(percError,2), '%'))) +
+  geom_point() +
+  #geom_bar(stat = 'identity', width = 1) +
+  geom_text(aes(label = paste(percError,"%")), size = 3.5) +
+  facet_wrap(~TEACHING_FAC_ABBREV, switch = "x",scales = "free_x") +
+  theme(panel.spacing = unit(0, "lines"), strip.background = element_blank()) +
+  xlab("Teaching Faculty") +ylab("Forecast Error") + ylim(-200,800)
+
+
+plot_monthly_tfac <- p %>%  ggplotly(tooltip = "text", width = 1280, height = 500) %>% 
+  style(textposition = "top right") %>% hide_legend()
+plot_monthly_tfac[['x']][['layout']][['annotations']][[2]][['x']] <- -0.03
+plot_monthly_tfac[['x']][['layout']][['annotations']][[1]][['y']] <- -0.07
+plot_monthly_tfac %>% 
+   layout(margin = list(l = 50, r = 50, t = 60, b = 80),
+           annotations = list(text = 'Appendix 3. Plot comparing Course and Bucket forecasts by Teaching Faculty for 2019.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.2))
+```
+
+```{r 2019 plot error by teaching faculty and fund source, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+KeyFundSources <- c("CSP","DOM FEE PAY: GPG","INTERNATIONAL: AUSTRALIA","RESEARCH TRAINING PROGRAM - DOMESTIC")
+Forecast_tfac_fund_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+             !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies")) &
+             #FCAST_MONTH == 'march' &
+             FUND_SOURCE %in% KeyFundSources) %>%
+  filter(grepl('FACULTY OF', TEACHING_FACULTY_NAME)) %>%
+  group_by(FUND_SOURCE,TEACHING_FACULTY_CD, DEPARTMENT_CD, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  left_join(Teaching_faculty_lookup, by = c("TEACHING_FACULTY_CD" = 'DEPARTMENT_CD')) %>%
+  rename(TEACHING_FACULTY_NAME = DEPARTMENT) %>% 
+  left_join(Teaching_faculty_lookup, by = c("DEPARTMENT_CD" = 'DEPARTMENT_CD')) %>% 
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50000982', 'WATER STUDIES CENTRE', DEPARTMENT)) %>%
+  mutate(DEPARTMENT = ifelse(DEPARTMENT_CD == '50168617', 'MUSIC TECHNOLOGY', DEPARTMENT)) %>%
+  left_join(Tfac_names) %>% 
+  group_by(FUND_SOURCE,TEACHING_FAC_ABBREV, FCAST_TYPE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup() %>%
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2)) %>% 
+  mutate(FUND_SOURCE_ABBREV = case_when(FUND_SOURCE == "CSP" ~ "CSP",
+                                      FUND_SOURCE == "DOM FEE PAY: GPG" ~ "DOM: GPG",
+                                      FUND_SOURCE == "INTERNATIONAL: AUSTRALIA" ~ "INT:AUS",
+                                      FUND_SOURCE == "RESEARCH TRAINING PROGRAM - DOMESTIC" ~ "RTP:DOM"))
+
+  p <- ggplot(Forecast_tfac_fund_error, aes(x =FCAST_TYPE, y = ForecastError,
+                                           fill = FCAST_TYPE, frame = FCAST_MONTH,
+                                     text = paste0('</br> Forecasted EFTSL: ', round(FCAST_EFTSL,2),
+                                                   '</br> Actual EFTSL: ', round(ACTUALS_EFTSL,2),
+                                                   '</br> Error: ', round(ForecastError,2),
+                                                   '</br> % Error: ', round(percError,2), '%'))) +
+  geom_point() +
+  #geom_bar(stat = 'identity', width = 0.5, position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = paste(round(percError,1),"%")), size = 3.1) +
+  facet_grid(FUND_SOURCE_ABBREV~TEACHING_FAC_ABBREV, 
+             labeller = label_wrap_gen(width = 4, multi_line = TRUE),
+             scales = "free") +
+  xlab("Teaching Faculty") +ylab("Forecast Error") +labs(fill = 'Forecast Type')
+  # theme(panel.spacing = unit(0, "lines"), strip.background = element_blank()) +
+  # xlab("Forecast Type") 
+plot_monthly_tfac_fund <- p %>% ggplotly( tooltip = "text", width = 1280, height = 600) %>%
+  hide_legend() %>% 
+  style(textposition = "top right")
+plot_monthly_tfac_fund[['x']][['layout']][['annotations']][[2]][['x']] <- -0.03
+plot_monthly_tfac_fund[['x']][['layout']][['annotations']][[1]][['y']] <- -0.07
+plot_monthly_tfac_fund %>% 
+  layout(margin = list(l = 50, r = 50, t = 60, b = 100),
+           annotations = list(text = 'Appendix 4. Key fund source comparison by Teaching Faculty for 2019.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.12))
+```
+
+```{r 2019 course code changes over time, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+KeyFundSources <- c("CSP","DOM FEE PAY: GPG","INTERNATIONAL: AUSTRALIA","RESEARCH TRAINING PROGRAM - DOMESTIC")
+Forecast_course_code_error <- Consolidated_error_analysis %>% 
+    filter(CAMPUS != "MALAYSIA" & CAMPUS != "SAFRICA" &
+             !(FACULTY %in% c("Monash College","MC MUELC", "MC MUFY", "Extension Studies",
+                              "MSDI", "MUARC")) &
+             FCAST_TYPE == 'Course' & 
+             FUND_SOURCE %in% KeyFundSources) %>%
+  group_by(FACULTY,COURSE_CD,COM_RET,FUND_SOURCE, FCAST_MONTH) %>%   
+  summarise_if(is.numeric, sum, na.rm=TRUE) %>% 
+  ungroup()  %>% 
+  mutate(ABSForecastError = round(abs(ForecastError),2)) %>% 
+  mutate(percError = round(100*ForecastError/ACTUALS_EFTSL,2)) %>% 
+  mutate(ABSpercError = round(100*ABSForecastError/ACTUALS_EFTSL,2)) %>% 
+  filter_at(vars(ABSpercError), all_vars(!is.infinite(.))) %>% 
+  mutate(row_id = paste(FACULTY,COURSE_CD,COM_RET,FUND_SOURCE))
+
+p <- Forecast_course_code_error %>% 
+  plot_ly(x = ~ACTUALS_EFTSL, y = ~ABSForecastError, width = 1280, height = 500) %>% 
+  add_markers(size = ~ ABSpercError, color = ~FUND_SOURCE,
+              hoverinfo = "text",
+              text = paste0('</br>', Forecast_course_code_error$COURSE_CD,
+                            '</br>', Forecast_course_code_error$COM_RET,
+                            '</br> Actual EFTSL: ', Forecast_course_code_error$ACTUALS_EFTSL,
+                            '</br> Forecasted EFTSL: ', round(Forecast_course_code_error$FCAST_EFTSL,2),
+                            '</br> Error: ', Forecast_course_code_error$ForecastError,
+                            '</br> Absolute Error: ', Forecast_course_code_error$ABSForecastError,
+                            '</br> Absolute % Error: ', Forecast_course_code_error$ABSpercError, '%'),
+              symbol = ~as.factor(COM_RET), ids = ~row_id,
+              frame = ~FCAST_MONTH, MARKER = list(sizemode = "diameter")) %>% 
+  layout(xaxis = list(title = "Actual Load"), yaxis = list(title = "Absolute Error"))
+p %>% layout(margin = list(l = 50, r = 50, t = 60, b = 100),
+           annotations = list(text = 'Appendix 5. Scatter plot of all course absolute error by key fund source for 2019.',
+                              font = list(size = 12),
+                              showarrow = FALSE,
+                              xref = 'paper', x = 0,
+                              yref = 'paper', y = -0.12))
+```
